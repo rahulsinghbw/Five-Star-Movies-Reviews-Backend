@@ -1,0 +1,135 @@
+const { isValidObjectId } = require("mongoose");
+const Actor = require("../model/actor");
+const {
+  sendError,
+  uploadImageToCloud,
+  formatActor,
+} = require("../utils/helper");
+
+const cloudinary = require("../cloud");
+
+exports.createActor = async (req, res) => {
+  const { name, about, gender } = req.body;
+  const { file } = req;
+  const newActor = new Actor({ name, about, gender });
+
+  if (file) {
+    const { url, public_id } = await uploadImageToCloud(file.path);
+
+    newActor.avatar = { url, public_id };
+  }
+  await newActor.save();
+  res.status(201).json({ actor: formatActor(newActor) });
+};
+
+// update
+// Things to consider while updating the avatar....
+// No.1 -> Is image file or avatar is updating or not. ?
+// No.2 -> if yes then remove old image before uploading new image or avatar
+
+exports.updateActor = async (req, res) => {
+  const { name, about, gender } = req.body;
+  const { file } = req;
+  const { actorId } = req.params;
+
+  if (!isValidObjectId(actorId)) return sendError(res, "Invalid request!");
+
+  const actor = await Actor.findById(actorId);
+  if (!actor) return sendError(res, "Invalid request , record not found!");
+
+  // remove old image if there was one!
+  const public_id = actor.avatar?.public_id;
+
+  if (public_id && file) {
+    const { result } = await cloudinary.uploader.destroy(public_id);
+    if (result !== "ok") {
+      return sendError(res, "Could not remove image from cloud!");
+    }
+  }
+
+  // update new image if there is one!
+  if (file) {
+    const { url, public_id } = await uploadImageToCloud(file.path);
+    actor.avatar = { url, public_id };
+  }
+  actor.name = name;
+  actor.about = about;
+  actor.gender = gender;
+
+  await actor.save();
+
+  res.status(201).json({ actor: formatActor(actor) });
+};
+
+exports.removeActor = async (req, res) => {
+  const { actorId } = req.params;
+
+  if (!isValidObjectId(actorId)) return sendError(res, "Invalid request!");
+
+  const actor = await Actor.findById(actorId);
+  if (!actor) return sendError(res, "Invalid request , record not found!");
+
+  const public_id = actor.avatar?.public_id;
+
+  // remove old image if there was one!
+  if (public_id) {
+    const { result } = await cloudinary.uploader.destroy(public_id);
+    if (result !== "ok") {
+      return sendError(res, "Could not remove image from cloud!");
+    }
+  }
+
+  await Actor.findByIdAndDelete(actorId);
+  res.json({ message: "Record removed successfully." });
+};
+
+exports.searchActor = async (req, res) => {
+  const {name} = req.query;
+
+  // const result = await Actor.find({ $text: { $search: `"${query.name}"` } });
+  if(!name.trim()) return sendError(res, "Invalid request!")
+  const result = await Actor.find({
+    name: { $regex: name, $options: "i" },
+  });
+
+  const actors = result.map((actor) => formatActor(actor));
+
+  res.json({ results: actors });
+};
+
+exports.getLatestActors = async (req, res) => {
+  //-1 means , it will sort from latest to older one.
+  //1 means, it will sort from older to latest one.
+  // limit() => How many actors you want to fetch.
+  const result = await Actor.find().sort({ createdAt: "-1" }).limit(12);
+  const actors = result.map((actor) => formatActor(actor));
+
+  res.json(actors);
+};
+
+exports.getSingleActor = async (req, res) => {
+  const { id } = req.params;
+  if (!isValidObjectId(id)) return sendError(res, "Invalid request!");
+
+  const actor = await Actor.findById(id);
+  if (!actor) return sendError(res, "Invalid request, actor not found!", 404);
+
+  res.json({actor : formatActor(actor)});
+};
+
+exports.getActors = async (req, res) => {
+  const { pageNo, limit } = req.query; // PageNo. and limit comes from front end in the form of string.
+
+  // await Actor.find() // it will find all the actors
+
+  const actors = await Actor.find({})
+    .sort({ createdAt: -1 }) //it will select the actor from latest date to older date.(latest actor at the begining)
+    .skip(parseInt(pageNo) * parseInt(limit))
+    .limit(parseInt(limit));
+
+  const profiles = actors.map((actor) => formatActor(actor));
+
+  res.json({
+    profiles,
+  });
+};
